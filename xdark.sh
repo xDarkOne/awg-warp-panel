@@ -112,7 +112,7 @@ do_renew() {
     ./wgcf register --accept-tos >/dev/null 2>&1
     ./wgcf generate >/dev/null 2>&1
     
-    NEW_KEY=$(grep "PrivateKey" wgcf-profile.conf 2>/dev/null | cut -d '=' -f 2 | tr -d ' ')
+    NEW_KEY=$(awk '/PrivateKey/ {print $3}' wgcf-profile.conf)
     if [ -z "$NEW_KEY" ]; then
         echo -e "${RED}Ошибка: Не удалось получить ключ от Cloudflare.${NC}"
         exit 1
