@@ -39,11 +39,16 @@ install_packages() {
 }
 
 detect_params() {
-    SERVER_IP=$(curl -s -4 ifconfig.me || ip -4 route get 8.8.8.8 | awk {'print $7'} | tr -d '\n')
-    WG_IFACE=$(ip link show | grep -E 'amn[0-9]+|wg[0-9]+|awg[0-9]+' | awk -F': ' '{print $2}' | head -n 1)
-    WG_IFACE=${WG_IFACE:-amn0}
-    if command -v wg &> /dev/null; then
-        WG_PORT=$(wg show $WG_IFACE listen-port 2>/dev/null)
+    # 1. Железобетонное определение IP (работает даже за NAT)
+    SERVER_IP=$(ip -4 route get 8.8.8.8 | grep -oP '(?<=src )(\S+)' | head -n 1)
+    
+    # 2. Определение интерфейса Amnezia/WireGuard (исключая сам warp)
+    WG_IFACE=$(ip link show | grep -E 'amn[0-9]+|wg[0-9]+|awg[0-9]+' | grep -v 'warp' | awk -F': ' '{print $2}' | tr -d ' ' | head -n 1)
+    WG_IFACE=${WG_IFACE:-amn0} # Дефолт, если интерфейс пока не создан
+    
+    # 3. Определение порта (если интерфейс уже поднят)
+    if command -v wg &> /dev/null && ip link show "$WG_IFACE" > /dev/null 2>&1; then
+        WG_PORT=$(wg show "$WG_IFACE" listen-port 2>/dev/null)
     fi
     WG_PORT=${WG_PORT:-36532}
 }
