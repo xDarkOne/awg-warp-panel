@@ -19,7 +19,7 @@ fi
 echo "=== Запуск скрипта: $(date) ===" >> $LOG_FILE
 
 # ==========================================
-# БЛОК 1: SMART BENCHMARK (ПОИСК ЛУЧШЕГО ШЛЮЗА)
+# БЛОК 1: SMART BENCHMARK (ИСПРАВЛЕННЫЙ)
 # ==========================================
 
 get_best_endpoints() {
@@ -27,31 +27,33 @@ get_best_endpoints() {
     local ports=("2408" "500" "1701" "4500")
     local results=()
 
-    echo -e "${CYAN}[*] Запуск Benchmark (тестируем 28 комбинаций на задержку)...${NC}"
+    # Выводим инфо в stderr (>&2), чтобы не сломать захват переменной
+    echo -e "${CYAN}[*] Запуск Benchmark (тестируем 28 комбинаций на задержку)...${NC}" >&2
     
     for ip in "${ips[@]}"; do
         for port in "${ports[@]}"; do
-            # Замеряем время отклика (пинг через UDP сокет bash)
             local start=$(date +%s%N)
+            # Проверка доступности UDP порта
             if timeout 0.4 bash -c "cat < /dev/null > /dev/udp/$ip/$port" 2>/dev/null; then
                 local end=$(date +%s%N)
                 local diff=$(( (end - start) / 1000000 ))
                 results+=("$diff|$ip:$port")
-                echo -e "${BLUE}[>] $ip:$port - ${diff}ms${NC}"
+                echo -e "${BLUE}[>] $ip:$port - ${diff}ms${NC}" >&2
             fi
         done
     done
 
-    # Сортируем: сверху самые быстрые
     if [ ${#results[@]} -eq 0 ]; then
-        echo -e "${RED}❌ Не удалось найти ни одного живого шлюза. Проверьте интернет или firewall.${NC}"
+        echo -e "${RED}❌ Не удалось найти ни одного живого шлюза.${NC}" >&2
         exit 1
     fi
+
+    # Выдаем только список адресов в stdout
     printf "%s\n" "${results[@]}" | sort -n | awk -F'|' '{print $2}'
 }
 
 # ==========================================
-# БЛОК 2: СИСТЕМНЫЕ ПРОВЕРКИ И ПАРАМЕТРЫ
+# БЛОК 2: СИСТЕМНЫЕ ПРОВЕРКИ
 # ==========================================
 
 install_packages() {
@@ -60,7 +62,6 @@ install_packages() {
         if ! dpkg -l | grep -q -w "^ii  $pkg "; then to_install="$to_install $pkg"; fi
     done
     if [ -n "$to_install" ]; then
-        echo -e "${CYAN}[*] Установка необходимых пакетов:$to_install...${NC}"
         apt-get update >> $LOG_FILE 2>&1
         apt-get install -y $to_install >> $LOG_FILE 2>&1
     fi
@@ -72,11 +73,9 @@ detect_params() {
     WG_IFACE=$(ip link show | grep -E 'amn[0-9]+|wg[0-9]+|awg[0-9]+' | grep -v 'warp' | awk -F': ' '{print $2}' | tr -d ' ' | head -n 1)
     WG_IFACE=${WG_IFACE:-amn0}
 
-    # Автоматический поиск портов Amnezia (AWG, Xray, Shadowsocks)
     EXCLUDE_PORTS_UDP=$(docker ps --filter "name=amnezia" --format '{{.Ports}}' 2>/dev/null | grep '/udp' | grep -oP '0.0.0.0:\K\d+' | sort -u)
     EXCLUDE_PORTS_TCP=$(docker ps --filter "name=amnezia" --format '{{.Ports}}' 2>/dev/null | grep '/tcp' | grep -oP '0.0.0.0:\K\d+' | sort -u)
     
-    # Если Docker пуст, берем порт WireGuard хоста
     if [ -z "$EXCLUDE_PORTS_UDP" ] && command -v wg &> /dev/null; then
         EXCLUDE_PORTS_UDP=$(wg show $WG_IFACE listen-port 2>/dev/null || echo "36532")
     fi
@@ -106,13 +105,13 @@ EOF
 
     local idx=1
     for p in $EXCLUDE_PORTS_UDP; do
-        echo "PostUp = iptables -t mangle -I PREROUTING $idx -i $iface -p udp --sport $port -j ACCEPT" >> /etc/wireguard/warp.conf
-        echo "PostDown = iptables -t mangle -D PREROUTING -i $iface -p udp --sport $port -j ACCEPT" >> /etc/wireguard/warp.conf
+        echo "PostUp = iptables -t mangle -I PREROUTING $idx -i $iface -p udp --sport $p -j ACCEPT" >> /etc/wireguard/warp.conf
+        echo "PostDown = iptables -t mangle -D PREROUTING -i $iface -p udp --sport $p -j ACCEPT" >> /etc/wireguard/warp.conf
         ((idx++))
     done
     for p in $EXCLUDE_PORTS_TCP; do
-        echo "PostUp = iptables -t mangle -I PREROUTING $idx -i $iface -p tcp --sport $port -j ACCEPT" >> /etc/wireguard/warp.conf
-        echo "PostDown = iptables -t mangle -D PREROUTING -i $iface -p tcp --sport $port -j ACCEPT" >> /etc/wireguard/warp.conf
+        echo "PostUp = iptables -t mangle -I PREROUTING $idx -i $iface -p tcp --sport $p -j ACCEPT" >> /etc/wireguard/warp.conf
+        echo "PostDown = iptables -t mangle -D PREROUTING -i $iface -p tcp --sport $p -j ACCEPT" >> /etc/wireguard/warp.conf
         ((idx++))
     done
 
@@ -161,7 +160,7 @@ do_renew() {
     local pk=$(awk '/PrivateKey/ {print $3}' wgcf-profile.conf 2>/dev/null)
     [[ -z "$pk" ]] && { echo -e "${RED}❌ Ошибка получения ключей.${NC}"; exit 1; }
 
-    # Получаем список лучших по пингу адресов
+    # Теперь здесь будут ТОЛЬКО адреса, без лишнего текста
     local best_endpoints=($(get_best_endpoints))
     local success=false
 
@@ -169,31 +168,28 @@ do_renew() {
         echo -ne "${BLUE}[>] Пробуем шлюз $endpoint... ${NC}"
         generate_config "$pk" "$SERVER_IP" "$WG_IFACE" "$endpoint"
         
-        # Полная очистка перед стартом
         wg-quick down warp 2>/dev/null
         for p in 90 91 95 100; do ip rule del priority $p 2>/dev/null; done
         
         wg-quick up warp >> $LOG_FILE 2>&1
-        
-        # Проверка IP через туннель
         local check_ip=$(curl -4 -s --interface warp --connect-timeout 4 ifconfig.me)
         
         if [[ -n "$check_ip" ]]; then
             echo -e "${GREEN}OK! IP: $check_ip${NC}"
-            echo -e "${YELLOW}Этот IP подходит? (Для уникальности на разных серверах можно поискать другой)${NC}"
-            read -p "Оставить этот? (y/n): " choice
+            echo -e "${YELLOW}Этот IP подходит? (y - оставить / n - искать другой для уникальности)${NC}"
+            read -p "Выбор: " choice
             if [[ "$choice" == "y" || -z "$choice" ]]; then
                 success=true; break
             fi
         else
-            echo -e "${RED}не удалось соединиться${NC}"
+            echo -e "${RED}нет связи${NC}"
         fi
     done
     [[ "$success" = "false" ]] && echo -e "${RED}❌ Не удалось найти рабочий шлюз.${NC}"
 }
 
 # ==========================================
-# БЛОК 4: ВЕБ-СЕРВЕР И SSL
+# ВЕБ-СЕРВЕР И SSL
 # ==========================================
 
 get_domain() {
@@ -234,8 +230,8 @@ web_menu() {
     while true; do
         echo -e "\n${YELLOW}=== УПРАВЛЕНИЕ ВЕБ-САЙТОМ ===${NC}"
         echo "1. 🛠️ Установить Nginx и домен"
-        echo "2. 🔒 SSL сертификат (Let's Encrypt)"
-        echo "3. 🎨 Поставить заглушку (Спиннер)"
+        echo "2. 🔒 SSL сертификат"
+        echo "3. 🎨 Заглушка (Спиннер)"
         echo "0. 🔙 Назад"
         read -p "Выбор: " wc
         case $wc in
@@ -257,7 +253,7 @@ EOF
 
 while true; do
     echo -e "\n${BLUE}=======================================${NC}"
-    echo -e "${GREEN}   AWG 2.0 Mega Panel v8.0 (Master)   ${NC}"
+    echo -e "${GREEN}   AWG 2.0 Mega Panel v8.1 (Fixed)    ${NC}"
     echo -e "${BLUE}=======================================${NC}"
     echo "1. 🚀 Установить / Обновить (Smart Benchmark)"
     echo "2. 📅 Авто-обновление (каждое воскресенье)"
@@ -272,7 +268,7 @@ while true; do
     case $choice in
         1) do_renew ;;
         2) (crontab -l 2>/dev/null | grep -v "xdark_warp.sh"; echo "0 5 * * 0 /root/xdark.sh --auto-renew") | crontab -
-           echo -e "${GREEN}Расписание в cron настроено.${NC}" ;;
+           echo -e "${GREEN}Расписание настроено.${NC}" ;;
         3) 
             echo -e "WARP: $(ip link show warp >/dev/null 2>&1 && echo -e "${GREEN}UP${NC}" || echo -e "${RED}DOWN${NC}")"
             if ip link show warp >/dev/null 2>&1; then
