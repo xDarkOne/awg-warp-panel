@@ -37,10 +37,30 @@ detect_params() {
     WG_IFACE=${WG_IFACE:-amn0}
 }
 
+get_random_endpoint() {
+    # Список проверенных подсетей Cloudflare
+    local subnets=("162.159.192" "162.159.193" "162.159.195" "188.114.96" "188.114.97")
+    # Список поддерживаемых портов
+    local ports=("2408" "500" "1701" "4500")
+
+    # Выбираем случайную подсеть
+    local rand_subnet=${subnets[$RANDOM % ${#subnets[@]}]}
+    # Генерируем случайный последний октет (от 1 до 254)
+    local rand_host=$((1 + RANDOM % 254))
+    # Выбираем случайный порт
+    local rand_port=${ports[$RANDOM % ${#ports[@]}]}
+
+    # Собираем всё вместе
+    echo "${rand_subnet}.${rand_host}:${rand_port}"
+}
+
 generate_config() {
     local private_key=$1
     local server_ip=$2
     local iface=$3
+    
+    # Генерируем случайный эндпоинт ПЕРЕД созданием файла
+    local endpoint=$(get_random_endpoint)
 
     cat << EOF > /etc/wireguard/warp.conf
 [Interface]
@@ -98,7 +118,7 @@ PostDown = iptables -D FORWARD -i $iface -p udp --dport 443 -j REJECT
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
 AllowedIPs = 0.0.0.0/0
-Endpoint = 162.159.192.1:2408
+Endpoint = $endpoint
 PersistentKeepalive = 25
 EOF
 }
@@ -155,7 +175,7 @@ fi
 
 while true; do
     echo -e "\n${BLUE}=======================================${NC}"
-    echo -e "${GREEN}   AWG 2.0 Mega Panel v5.1 (Final Fix)  ${NC}"
+    echo -e "${GREEN}   AWG 2.0 Mega Panel v6   ${NC}"
     echo -e "${BLUE}=======================================${NC}"
     echo -e "${YELLOW}--- СЕТЬ И МАРШРУТИЗАЦИЯ ---${NC}"
     echo "1. 🚀 Установить WARP / Обновить ключи"
