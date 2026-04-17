@@ -70,31 +70,35 @@ Address = 172.16.0.2/32
 MTU = 1280
 Table = 123
 
-PostUp = ip rule add to 172.16.0.0/12 table main priority 90
-PostDown = ip rule del to 172.16.0.0/12 table main priority 90
-PostUp = ip rule add to $server_ip table main priority 91
-PostDown = ip rule del to $server_ip table main priority 91
+# === ЗАЩИТА SSH И ОСНОВНОГО РОУТИНГА ===
+# Принудительно отправляем ответы сервера через тот же IP, на который они пришли
+PostUp = ip rule add from $server_ip table main priority 10
+PreDown = ip rule del from $server_ip table main priority 10
 
-PostUp = iptables -t mangle -I PREROUTING 1 -i $iface -p udp --sport $port -j ACCEPT
-PostUp = iptables -t mangle -I PREROUTING 2 -i $iface -j MARK --set-mark 0x123
-PostDown = iptables -t mangle -D PREROUTING -i $iface -p udp --sport $port -j ACCEPT
-PostDown = iptables -t mangle -D PREROUTING -i $iface -j MARK --set-mark 0x123
+# === ПРАВИЛА МАРШРУТИЗАЦИИ ДЛЯ КЛИЕНТОВ (AMNEZIA) ===
+# '|| true' не дает wg-quick упасть, если интерфейс $iface еще не создан
+PostUp = iptables -t mangle -I PREROUTING 1 -i $iface -p udp --sport $port -j ACCEPT || true
+PostUp = iptables -t mangle -I PREROUTING 2 -i $iface -j MARK --set-mark 0x123 || true
+PreDown = iptables -t mangle -D PREROUTING -i $iface -p udp --sport $port -j ACCEPT || true
+PreDown = iptables -t mangle -D PREROUTING -i $iface -j MARK --set-mark 0x123 || true
 
 PostUp = ip rule add fwmark 0x123 table 123 priority 100
-PostDown = ip rule del fwmark 0x123 table 123 priority 100
+PreDown = ip rule del fwmark 0x123 table 123 priority 100
 
+# === NAT И ПРОБРОС ТРАФИКА В WARP ===
 PostUp = iptables -t nat -I POSTROUTING 1 -o warp -j MASQUERADE
-PostDown = iptables -t nat -D POSTROUTING -o warp -j MASQUERADE
-PostUp = iptables -I FORWARD 1 -i $iface -o warp -j ACCEPT
-PostUp = iptables -I FORWARD 1 -i warp -o $iface -j ACCEPT
-PostDown = iptables -D FORWARD -i $iface -o warp -j ACCEPT
-PostDown = iptables -D FORWARD -i warp -o $iface -j ACCEPT
+PreDown = iptables -t nat -D POSTROUTING -o warp -j MASQUERADE
+PostUp = iptables -I FORWARD 1 -i $iface -o warp -j ACCEPT || true
+PostUp = iptables -I FORWARD 1 -i warp -o $iface -j ACCEPT || true
+PreDown = iptables -D FORWARD -i $iface -o warp -j ACCEPT || true
+PreDown = iptables -D FORWARD -i warp -o $iface -j ACCEPT || true
 
-PostUp = iptables -t mangle -I FORWARD 1 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1060
-PostDown = iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1060
+# === ФИКС MTU И БЛОКИРОВОК ===
+PostUp = iptables -t mangle -I FORWARD 1 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1060 || true
+PreDown = iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1060 || true
 
-PostUp = iptables -I FORWARD 1 -i $iface -p udp --dport 443 -j REJECT
-PostDown = iptables -D FORWARD -i $iface -p udp --dport 443 -j REJECT
+PostUp = iptables -I FORWARD 1 -i $iface -p udp --dport 443 -j REJECT || true
+PreDown = iptables -D FORWARD -i $iface -p udp --dport 443 -j REJECT || true
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
