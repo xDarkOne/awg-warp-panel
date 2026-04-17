@@ -70,13 +70,22 @@ Address = 172.16.0.2/32
 MTU = 1280
 Table = 123
 
-# === ЗАЩИТА SSH И ОСНОВНОГО РОУТИНГА ===
-# Принудительно отправляем ответы сервера через тот же IP, на который они пришли
+# === 1. ЗАЩИТА SSH И ОТВЕТОВ ХОСТА ===
 PostUp = ip rule add from $server_ip table main priority 10
 PreDown = ip rule del from $server_ip table main priority 10
 
-# === ПРАВИЛА МАРШРУТИЗАЦИИ ДЛЯ КЛИЕНТОВ (AMNEZIA) ===
-# '|| true' не дает wg-quick упасть, если интерфейс $iface еще не создан
+# === 2. ИСКЛЮЧЕНИЯ ДЛЯ DOCKER И ЛОКАЛЬНОГО DNS AMNEZIA ===
+# (Запрещаем отправлять внутрисетевой трафик в WARP)
+PostUp = ip rule add to 172.16.0.0/12 table main priority 90
+PreDown = ip rule del to 172.16.0.0/12 table main priority 90
+PostUp = ip rule add to 10.0.0.0/8 table main priority 90
+PreDown = ip rule del to 10.0.0.0/8 table main priority 90
+PostUp = ip rule add to 192.168.0.0/16 table main priority 90
+PreDown = ip rule del to 192.168.0.0/16 table main priority 90
+PostUp = ip rule add to $server_ip table main priority 91
+PreDown = ip rule del to $server_ip table main priority 91
+
+# === 3. МАРШРУТИЗАЦИЯ КЛИЕНТСКОГО ТРАФИКА В WARP ===
 PostUp = iptables -t mangle -I PREROUTING 1 -i $iface -p udp --sport $port -j ACCEPT || true
 PostUp = iptables -t mangle -I PREROUTING 2 -i $iface -j MARK --set-mark 0x123 || true
 PreDown = iptables -t mangle -D PREROUTING -i $iface -p udp --sport $port -j ACCEPT || true
@@ -85,7 +94,7 @@ PreDown = iptables -t mangle -D PREROUTING -i $iface -j MARK --set-mark 0x123 ||
 PostUp = ip rule add fwmark 0x123 table 123 priority 100
 PreDown = ip rule del fwmark 0x123 table 123 priority 100
 
-# === NAT И ПРОБРОС ТРАФИКА В WARP ===
+# === 4. NAT И ПРОБРОС ТРАФИКА ===
 PostUp = iptables -t nat -I POSTROUTING 1 -o warp -j MASQUERADE
 PreDown = iptables -t nat -D POSTROUTING -o warp -j MASQUERADE
 PostUp = iptables -I FORWARD 1 -i $iface -o warp -j ACCEPT || true
@@ -93,7 +102,7 @@ PostUp = iptables -I FORWARD 1 -i warp -o $iface -j ACCEPT || true
 PreDown = iptables -D FORWARD -i $iface -o warp -j ACCEPT || true
 PreDown = iptables -D FORWARD -i warp -o $iface -j ACCEPT || true
 
-# === ФИКС MTU И БЛОКИРОВОК ===
+# === 5. ФИКС MTU И БЛОКИРОВОК ===
 PostUp = iptables -t mangle -I FORWARD 1 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1060 || true
 PreDown = iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1060 || true
 
